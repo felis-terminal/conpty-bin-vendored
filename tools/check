@@ -1,0 +1,49 @@
+#!/usr/bin/env nix
+#! nix shell nixpkgs#bash nixpkgs#osslsigncode nixpkgs#cargo nixpkgs#rustc nixpkgs#gcc nixpkgs#git --command bash
+# Everything that must hold before a version publishes, except the Windows
+# smoke test.
+set -eu
+
+cd "$(dirname "$0")/.."
+
+# assets/ is exactly what nuget.org serves for this version.
+tools/update-assets
+if ! git diff --quiet -- assets || [ -n "$(git ls-files --others -- assets)" ]; then
+  git status --short -- assets >&2
+  echo "assets/ differs from the NuGet package" >&2
+  exit 1
+fi
+
+# Signed by Microsoft, independently of NuGet: a compromised publisher
+# account cannot produce these signatures.
+leaf='CN=Microsoft Corporation,O=Microsoft Corporation,L=Redmond,ST=Washington,C=US'
+for file in assets/*/conpty.dll assets/*/OpenConsole.exe; do
+  if ! out=$(osslsigncode verify -CAfile tools/microsoft-roots.pem -TSA-CAfile tools/microsoft-roots.pem -in "$file" 2>&1); then
+    printf '%s\n' "$out" >&2
+    echo "$file: the signature does not verify against Microsoft's roots" >&2
+    exit 1
+  fi
+  signer=$(printf '%s\n' "$out" | awk '/^Signer.s certificate:/ { s = 1 } s && /Subject:/ { sub(/^[ \t]*Subject: /, ""); print; exit }')
+  if [ "$signer" != "$leaf" ]; then
+    echo "$file: signed by '$signer', not '$leaf'" >&2
+    exit 1
+  fi
+done
+
+cargo test
+
+# The archive contains exactly the seven assets.
+cargo package
+expected='assets/arm64/OpenConsole.exe
+assets/arm64/conpty.dll
+assets/conpty.h
+assets/x64/OpenConsole.exe
+assets/x64/conpty.dll
+assets/x86/OpenConsole.exe
+assets/x86/conpty.dll'
+listed=$(cargo package --list | grep '^assets/' | LC_ALL=C sort)
+if [ "$listed" != "$(printf '%s\n' "$expected" | LC_ALL=C sort)" ]; then
+  printf 'the package lists these assets:\n%s\n' "$listed" >&2
+  exit 1
+fi
+echo "all checks passed"

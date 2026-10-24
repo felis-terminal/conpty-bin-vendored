@@ -1,0 +1,39 @@
+# Renovate bumps only Cargo.toml's version; this commits the matching assets
+# to its branch. Renovate's own credentials never run repository code, and a
+# deploy-key push, unlike one with the automatic token, starts CI on the new
+# head.
+name: assets
+
+on:
+  push:
+    branches: ['renovate/**']
+
+jobs:
+  refresh:
+    runs-on: x86_64-linux
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: tools/update-assets
+      - name: push the assets when they changed
+        env:
+          ASSETS_DEPLOY_KEY: ${{ secrets.ASSETS_DEPLOY_KEY }}
+        run: |
+          git add assets
+          if git diff --cached --quiet; then
+            echo "assets already match Cargo.toml"
+            exit 0
+          fi
+          version=$(sed -n 's/^version = "\([0-9]*\.[0-9]*\.[0-9]*\)[0-9]"$/\1/p' Cargo.toml)
+          git -c user.name="conpty-bin-vendored assets" -c user.email=assets-bot@noreply.git.natsukium.com \
+            commit -m "assets: ConPTY $version"
+          ssh_dir=$(mktemp -d)
+          trap 'rm -rf "$ssh_dir"' EXIT
+          printf '%s\n' "$ASSETS_DEPLOY_KEY" > "$ssh_dir/key"
+          chmod 600 "$ssh_dir/key"
+          # Forgejo's SSH listens only on the tailnet; the public name is HTTPS alone.
+          echo '[manyara.tail4108.ts.net]:2022 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE1vOEP/FgsDeYwV0ha2b4+jR66gpRnkYCi6wTVw5I53' > "$ssh_dir/known_hosts"
+          GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts -o StrictHostKeyChecking=yes" \
+            nix shell nixpkgs#openssh -c git push "ssh://forgejo@manyara.tail4108.ts.net:2022/${GITHUB_REPOSITORY}.git" "HEAD:${GITHUB_REF_NAME}"

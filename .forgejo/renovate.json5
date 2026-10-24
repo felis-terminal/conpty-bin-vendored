@@ -1,0 +1,27 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["config:best-practices"],
+  timezone: "Asia/Tokyo",
+  minimumReleaseAge: "3 days",
+  semanticCommits: "disabled",
+  commitMessagePrefix: "deps:",
+  // A human reviews every upstream binary before it ships.
+  automerge: false,
+  // The assets workflow's commit on a Renovate branch must not make Renovate
+  // treat the branch as edited and stop updating it.
+  gitIgnoredAuthors: ["assets-bot@noreply.git.natsukium.com"],
+  customManagers: [
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^Cargo\\.toml$/"],
+      matchStrings: ['\\nversion = "(?<currentValue>\\d+\\.\\d+\\.\\d+)\\d"'],
+      depNameTemplate: "Microsoft.Windows.Console.ConPTY",
+      datasourceTemplate: "nuget",
+      // NuGet versioning reads a bare version as a minimum range, which never
+      // proposes an update.
+      versioningTemplate: "semver",
+      // A new upstream version starts again at revision 0.
+      autoReplaceStringTemplate: '\\nversion = "{{{newValue}}}0"',
+    },
+  ],
+}

@@ -1,0 +1,82 @@
+# The only GitHub workflow: CI runs on Forgejo, and this publishes a version
+# from the push mirror once main's version is not yet on crates.io.
+name: publish
+
+on:
+  push:
+    branches: [main]
+  # The first publish: trusted publishing attaches only to an existing crate,
+  # so that one run authenticates with a short-lived token instead.
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: authenticate with the CRATES_IO_BOOTSTRAP_TOKEN secret
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The trusted publisher names this environment, so no other job can mint a
+    # crates.io token.
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      CRATE: conpty-bin-vendored
+      USER_AGENT: conpty-bin-vendored publish (https://github.com/felis-terminal/conpty-bin-vendored)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: is this version unpublished
+        id: plan
+        run: |
+          version=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[0].version')
+          status=$(curl -s -o /dev/null -w '%{http_code}' -A "$USER_AGENT" "https://crates.io/api/v1/crates/$CRATE/$version")
+          case "$status" in
+            404) echo "publish=true" >> "$GITHUB_OUTPUT" ;;
+            200) echo "publish=false" >> "$GITHUB_OUTPUT"; echo "$CRATE $version is on crates.io" ;;
+            *) echo "crates.io answered $status" >&2; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # The checks run package code, so they finish before a token exists. The
+      # Windows smoke test passed on Forgejo before this commit reached main.
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        if: steps.plan.outputs.publish == 'true'
+      - run: tools/check
+        if: steps.plan.outputs.publish == 'true'
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        id: auth
+        if: steps.plan.outputs.publish == 'true' && !inputs.bootstrap
+      - run: cargo publish --no-verify
+        if: steps.plan.outputs.publish == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ inputs.bootstrap && secrets.CRATES_IO_BOOTSTRAP_TOKEN || steps.auth.outputs.token }}
+      # Attests what crates.io serves right after this run's publish.
+      - name: fetch the published archive
+        if: steps.plan.outputs.publish == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          for _ in $(seq 30); do
+            curl -fsSL -A "$USER_AGENT" -o "$CRATE-$VERSION.crate" \
+              "https://static.crates.io/crates/$CRATE/$CRATE-$VERSION.crate" && exit 0
+            sleep 10
+          done
+          exit 1
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        if: steps.plan.outputs.publish == 'true'
+        with:
+          subject-path: ${{ env.CRATE }}-${{ steps.plan.outputs.version }}.crate

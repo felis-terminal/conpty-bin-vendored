@@ -1,0 +1,25 @@
+#!/usr/bin/env nix
+#! nix shell nixpkgs#bash nixpkgs#curl nixpkgs#unzip --command bash
+# Recreate assets/ from the NuGet package Cargo.toml's version names (or the
+# version given). Verifies nothing; tools/check does.
+set -eu
+
+cd "$(dirname "$0")/.."
+version=${1:-$(sed -n 's/^version = "\([0-9]*\.[0-9]*\.[0-9]*\)[0-9]"$/\1/p' Cargo.toml)}
+[ -n "$version" ] || { echo "no version in Cargo.toml" >&2; exit 1; }
+
+id=microsoft.windows.console.conpty
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+curl -fsSL -o "$work/pkg.zip" "https://api.nuget.org/v3-flatcontainer/$id/$version/$id.$version.nupkg"
+unzip -q "$work/pkg.zip" -d "$work/pkg"
+
+rm -rf assets
+mkdir assets
+cp "$work/pkg/inc/conpty.h" assets/conpty.h
+for arch in x64 arm64 x86; do
+  mkdir "assets/$arch"
+  cp "$work/pkg/runtimes/win-$arch/native/conpty.dll" "assets/$arch/conpty.dll"
+  cp "$work/pkg/build/native/runtimes/$arch/OpenConsole.exe" "assets/$arch/OpenConsole.exe"
+done
+echo "assets/ now holds ConPTY $version"

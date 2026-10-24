@@ -1,0 +1,13 @@
+[package]
+name = "conpty-bin-vendored"
+# The upstream NuGet version with one revision digit appended; see README.md.
+version = "1.25.2609300030"
+edition = "2024"
+# const core::str::from_utf8, which derives VERSION.
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/felis-terminal/conpty-bin-vendored"
+description = "Microsoft's out-of-band ConPTY (conpty.dll and OpenConsole.exe) as embedded bytes, with the API of that version"
+keywords = ["conpty", "windows", "pty", "terminal", "console"]
+categories = ["os::windows-apis"]
+include = ["src/**", "assets/**", "LICENSE", "LICENSE-MICROSOFT", "README.md"]
